@@ -55,8 +55,16 @@ class G2GScraperCog(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def g2g_force(self, interaction: discord.Interaction):
         await interaction.response.send_message("🔍 Starting forced G2G scrape in the background...", ephemeral=True)
-        # Run it asynchronously
-        asyncio.create_task(self.scrape_g2g(interaction.guild))
+        print(f"DEBUG: /g2g_force triggered by {interaction.user}")
+        
+        # Run it asynchronously but catch errors
+        async def run_and_catch():
+            try:
+                await self.scrape_g2g(interaction.guild)
+            except Exception as e:
+                print(f"DEBUG: Error inside forced scrape task: {e}")
+                
+        asyncio.create_task(run_and_catch())
 
     @tasks.loop(hours=1.0)
     async def scraper_task(self):
@@ -70,15 +78,22 @@ class G2GScraperCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def scrape_g2g(self, guild: discord.Guild):
+        print(f"DEBUG: scrape_g2g called for guild {guild.name}")
         config = await db_handler.get_g2g_config(guild.id)
+        
+        print(f"DEBUG: Config result for {guild.id}: {config}")
         if not config or not config[0] or not config[1]:
-            # Channels not configured yet
+            print("DEBUG: Scraping aborted. Channels not configured in database.")
             return
 
         public_channel = guild.get_channel(config[0])
         admin_channel = guild.get_channel(config[1])
 
+        print(f"DEBUG: Public Channel Object: {public_channel}")
+        print(f"DEBUG: Admin Channel Object: {admin_channel}")
+
         if not public_channel or not admin_channel:
+            print("DEBUG: Scraping aborted. Could not resolve discord.TextChannel objects from IDs.")
             return
 
         print(f"[{guild.name}] Generating G2G Scraper Session...")
