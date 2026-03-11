@@ -100,12 +100,20 @@ class G2GScraperCog(commands.Cog):
         
         try:
             # Connect to playwright
+            print(f"DEBUG: Opening Playwright Manager...")
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
+                print(f"DEBUG: Launching Chromium...")
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"]
+                )
+                print(f"DEBUG: Creating Browser Context...")
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
                 )
+                print(f"DEBUG: Opening New Page...")
                 page = await context.new_page()
+                print(f"DEBUG: Page opened successfully. Starting scrape loop...")
 
                 offers_found = []
 
