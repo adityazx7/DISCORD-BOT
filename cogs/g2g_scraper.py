@@ -66,7 +66,7 @@ class G2GScraperCog(commands.Cog):
                 
         asyncio.create_task(run_and_catch())
 
-    @tasks.loop(hours=1.0)
+    @tasks.loop(hours=12.0)
     async def scraper_task(self):
         # We need to run this for all configured guilds.
         # Since it's a simple bot right now, we will just iterate over all guilds the bot is in.
@@ -134,14 +134,14 @@ class G2GScraperCog(commands.Cog):
                 for seller in SELLERS:
                     print(f"DEBUG: Processing seller {seller}...")
                     try:
-                        url = f"https://www.g2g.com/{seller}"
+                        url = f"https://www.g2g.com/categories/one-piece-bounty-rush-account?seller={seller}"
                         # Go to seller page, which triggers the SPA to fetch the API
                         print(f"DEBUG: Navigating to {url}...")
                         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                         
-                        # Scroll down to trigger lazy loading of offers
+                        # Scroll down slightly just in case
                         print(f"DEBUG: Scrolling down to trigger API...")
-                        await page.evaluate("window.scrollBy(0, 1000)")
+                        await page.evaluate("window.scrollBy(0, 5000)")
                         
                         # Wait an extra few seconds for the API to fire and intercept
                         print(f"DEBUG: Page loaded! Waiting 5 seconds for JSON intercepts...")
@@ -165,6 +165,9 @@ class G2GScraperCog(commands.Cog):
                         
                     # 2. Extract Details
                     title = offer.get("title", "Unknown Account")
+                    
+                    if "5000" not in title:
+                        continue
                     
                     # Remove "Automatic delivery" from the title as requested
                     clean_title = re.sub(r"(?i)\s*\[?automatic delivery\]?\s*", "", title).strip()
