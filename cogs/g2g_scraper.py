@@ -130,16 +130,21 @@ class G2GScraperCog(commands.Cog):
 
                 page.on("response", handle_response)
 
+                print(f"DEBUG: Starting seller loop...")
                 for seller in SELLERS:
+                    print(f"DEBUG: Processing seller {seller}...")
                     try:
                         url = f"https://www.g2g.com/{seller}"
                         # Go to seller page, which triggers the SPA to fetch the API
-                        await page.goto(url, wait_until="networkidle", timeout=30000)
+                        print(f"DEBUG: Navigating to {url}...")
+                        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                         # Wait an extra few seconds to ensure background API calls finish
-                        await page.wait_for_timeout(3000)
+                        print(f"DEBUG: Page loaded! Waiting 5 seconds for JSON intercepts...")
+                        await page.wait_for_timeout(5000)
                     except Exception as e:
-                        print(f"Error loading seller {seller}: {e}")
+                        print(f"DEBUG: Error loading seller {seller}: {e}")
 
+                print(f"DEBUG: Closing browser... Found {len(offers_found)} offers.")
                 await browser.close()
                 
                 # Process the captured offers
