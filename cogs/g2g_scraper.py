@@ -218,3 +218,4 @@ class G2GScraperCog(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(G2GScraperCog(bot))
+    # Force webhook for Railway
