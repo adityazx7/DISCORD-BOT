@@ -138,7 +138,12 @@ class G2GScraperCog(commands.Cog):
                         # Go to seller page, which triggers the SPA to fetch the API
                         print(f"DEBUG: Navigating to {url}...")
                         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                        # Wait an extra few seconds to ensure background API calls finish
+                        
+                        # Scroll down to trigger lazy loading of offers
+                        print(f"DEBUG: Scrolling down to trigger API...")
+                        await page.evaluate("window.scrollBy(0, 1000)")
+                        
+                        # Wait an extra few seconds for the API to fire and intercept
                         print(f"DEBUG: Page loaded! Waiting 5 seconds for JSON intercepts...")
                         await page.wait_for_timeout(5000)
                     except Exception as e:
