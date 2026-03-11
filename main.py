@@ -47,7 +47,7 @@ async def on_ready():
     print("------")
 
 @bot.command()
-@commands.is_owner()
+@commands.has_permissions(administrator=True)
 async def sync(ctx: commands.Context, guilds: commands.Greedy[discord.Object], spec: str = None) -> None:
     """Syncs the slash commands array to the current guild.
     Usage:
