@@ -11,6 +11,13 @@ class AuctionCog(commands.Cog):
         self.bot = bot
         self.auction_cleanup.start()
 
+    async def cog_load(self):
+        """Register persistent views for all active auctions on startup."""
+        active_auctions = await db_handler.get_all_active_auctions()
+        for auction_id, _, _, _ in active_auctions:
+            self.bot.add_view(AuctionControlView(auction_id, self))
+        print(f"Registered {len(active_auctions)} persistent auction views.")
+
     def cog_unload(self):
         self.auction_cleanup.cancel()
 
@@ -90,39 +97,64 @@ class AuctionCog(commands.Cog):
             
             # Post rules if channel provided
             if rules_channel:
-                rules_text = (
-                    "### 📜 OFFICIAL AUCTION RULES\n\n"
-                    "**1. General Conduct**\n"
-                    "• **No Fake Bidding**: Do not bid if you do not have the funds ready. Backing out of a winning bid will result in an immediate and permanent ban.\n"
-                    "• **No Bid Retractions**: Once a bid is placed, it is final. Think before you type.\n"
-                    "• **Verification Required**: All sellers must provide account details to Admin before starting. Auction won't stop once started if account owner says.\n\n"
-                    "**2. COMMISSION**\n"
-                    "• **10%** of the final sale price must go to the Server Owner for facilitating the auction.\n\n"
-                    "**3. The Bidding Process**\n"
-                    "• **Format**: Bids must follow `50$` or `5000₹` format ONLY. Plain numbers are rejected.\n"
-                    "• **Increments**: Respect the Minimum Bid Increment set for each auction.\n"
-                    "• **Starting Bid (SB)**: Agreed upon with the seller before the auction goes live.\n\n"
-                    "**4. Anti-Snipe Protection**\n"
-                    "• If a bid is placed within the **last 5 minutes**, the timer is automatically extended by **10 minutes**.\n\n"
-                    "**5. Payment & Middleman (MM)**\n"
-                    "• **Payment Window**: Winners must contact the ADMIN and initiate payment within 24 hours.\n\n"
-                    "**6. Restrictions**\n"
-                    "• STEAM LINKED OPBR ACCOUNTS WONT BE PUT ON AUCTION."
-                )
-                rules_embed = discord.Embed(
-                    title="Auction Terms & Conditions",
-                    description=rules_text,
-                    color=discord.Color.dark_gold()
-                )
-                rules_embed.set_footer(text="By bidding, you agree to all rules above.")
+                rules_embed = self.get_rules_embed()
                 await rules_channel.send(embed=rules_embed)
                 
         except Exception as e:
             await interaction.response.send_message(f"❌ Setup failed: {e}", ephemeral=True)
 
+    def get_rules_embed(self):
+        rules_text = (
+            "### 📜 OFFICIAL AUCTION RULES\n\n"
+            "**1. General Conduct**\n"
+            "• **No Fake Bidding**: Do not bid if you do not have the funds ready. Backing out of a winning bid will result in an immediate and permanent ban.\n"
+            "• **No Bid Retractions**: Once a bid is placed, it is final. Think before you type.\n"
+            "• **Verification Required**: All sellers must provide account details to Admin before starting. Auction won't stop once started if account owner says.\n\n"
+            "**2. COMMISSION**\n"
+            "• **10%** of the final sale price must go to the Server Owner for facilitating the auction.\n\n"
+            "**3. The Bidding Process**\n"
+            "• **Format**: Bids must follow `50$` or `5000₹` format ONLY. Plain numbers are rejected.\n"
+            "• **Increments**: Respect the Minimum Bid Increment set for each auction.\n"
+            "• **Starting Bid (SB)**: Agreed upon with the seller before the auction goes live.\n\n"
+            "**4. Anti-Snipe Protection**\n"
+            "• If a bid is placed within the **last 5 minutes**, the timer is automatically extended by **10 minutes**.\n\n"
+            "**5. Payment & Middleman (MM)**\n"
+            "• **Payment Window**: Winners must contact the ADMIN and initiate payment within 24 hours.\n\n"
+            "**6. Restrictions**\n"
+            "• STEAM LINKED OPBR ACCOUNTS WONT BE PUT ON AUCTION."
+        )
+        embed = discord.Embed(
+            title="Auction Terms & Conditions",
+            description=rules_text,
+            color=discord.Color.dark_gold()
+        )
+        embed.set_footer(text="By bidding, you agree to all rules above.")
+        return embed
+
+    @app_commands.command(name="auction-rules", description="Display the auction rules")
+    async def auction_rules(self, interaction: discord.Interaction):
+        await interaction.response.send_message(embed=self.get_rules_embed())
+
     def parse_numeric(self, val_str: str) -> float:
         """Helper to extract float from strings like '1$', '5h', '83.50₹'"""
         cleaned = re.sub(r'[^\d.]', '', val_str)
+        return float(cleaned) if cleaned else 0.0
+
+    def parse_duration(self, duration_str: str) -> float:
+        """Parses durations like '1h 30m', '45m', '2h' into total hours (float)."""
+        duration_str = duration_str.lower().strip()
+        # Handle '1h 30m' or '1h30m'
+        parts = re.findall(r'(\d+)\s*([hm])', duration_str)
+        if parts:
+            total_minutes = 0
+            for val, unit in parts:
+                if unit == 'h':
+                    total_minutes += int(val) * 60
+                elif unit == 'm':
+                    total_minutes += int(val)
+            return total_minutes / 60.0
+        # Fallback for plain numbers (assume hours)
+        cleaned = re.sub(r'[^\d.]', '', duration_str)
         return float(cleaned) if cleaned else 0.0
 
     @app_commands.command(name="create-auction", description="Start a new auction")
@@ -131,12 +163,11 @@ class AuctionCog(commands.Cog):
         details="Details about the account",
         starting_price="Starting price (e.g. 1$)",
         min_raise="Minimum raise (e.g. 0.5$)",
-        hours="Duration (e.g. 5 or 5h)",
+        duration="Duration (e.g. 5h, 1h 30m, 45m)",
         inr_rate="Conversion rate (e.g. 100 or 100₹)",
         image="Optional image of the account"
     )
-    async def create_auction(self, interaction: discord.Interaction, title: str, details: str, starting_price: str, min_raise: str, hours: str, inr_rate: str, image: discord.Attachment | None = None):
-        # Permission check
+    async def create_auction(self, interaction: discord.Interaction, title: str, details: str, starting_price: str, min_raise: str, duration: str, inr_rate: str, image: discord.Attachment | None = None):
         config = await db_handler.get_auction_config(interaction.guild_id)
         if not config:
             await interaction.response.send_message("❌ Auction system is not set up. Use `/auction-setup` first.", ephemeral=True)
@@ -148,35 +179,31 @@ class AuctionCog(commands.Cog):
             await interaction.response.send_message("❌ You don't have permission to start auctions.", ephemeral=True)
             return
 
-        # Parse inputs
         try:
             s_price = self.parse_numeric(starting_price)
             m_raise = self.parse_numeric(min_raise)
-            h_val = self.parse_numeric(hours)
+            h_val = self.parse_duration(duration)
             i_rate = self.parse_numeric(inr_rate)
             
             if s_price <= 0 or h_val <= 0 or i_rate <= 0:
                 raise ValueError("Values must be greater than zero.")
         except Exception:
-            await interaction.response.send_message("❌ Invalid numbers. Please provide values like `1$`, `5h`, or `100₹`.", ephemeral=True)
+            await interaction.response.send_message("❌ Invalid values. Provide formats like `1$`, `1h 30m`, or `100₹`.", ephemeral=True)
             return
 
         bid_channel_id = config[0]
         channel = interaction.guild.get_channel(bid_channel_id)
         if not channel:
-            await interaction.response.send_message("❌ Bidding channel not found. Re-run setup.", ephemeral=True)
+            await interaction.response.send_message("❌ Bidding channel not found.", ephemeral=True)
             return
 
-        # Time calculation
         now = datetime.datetime.now(datetime.timezone.utc)
         end_time = now + datetime.timedelta(hours=h_val)
         
-        # Save to DB
         auction_id = await db_handler.create_auction(
             interaction.guild_id, title, details, s_price, m_raise, i_rate, end_time.isoformat()
         )
         
-        # Create Embed
         embed = discord.Embed(
             title=f"🟢 ACTIVE AUCTION: {title}",
             description=details,
@@ -192,7 +219,6 @@ class AuctionCog(commands.Cog):
         if image:
             embed.set_image(url=image.url)
             
-        # Add buttons
         view = AuctionControlView(auction_id, self)
         msg = await channel.send(embed=embed, view=view)
         await db_handler.set_auction_message(auction_id, msg.id)
@@ -211,137 +237,126 @@ class AuctionCog(commands.Cog):
         if message.channel.id != bid_channel_id:
             return
 
-        # Admin/Mod bypass
         if message.author.guild_permissions.administrator or any(r.id == mod_role_id for r in message.author.roles):
             return
 
-        # Member moderation: Check if it's a valid bid
         content = message.content.strip()
-        
-        # Regex to find number followed by $ or ₹ (user's format: 50$ or 5000₹)
         match = re.search(r'(\d+(\.\d+)?)\s*([$₹])', content)
         
         if not match:
-            await message.delete()
-            try:
-                await message.author.send("❌ In the bidding channel, you can only post bids. Example: `100$` or `8000₹`. Plain numbers or currency at the start are not allowed.")
-            except: pass
+            await message.add_reaction("❌")
+            await message.channel.send(f"❌ {message.author.mention}, you can only post bids following `50$` or `5000₹` format! Plain numbers or symbols at the start are not allowed.", delete_after=10)
             return
 
         amount = float(match.group(1))
         currency = match.group(3)
         
-        # Get active auction
         auction_data = await db_handler.get_auction_by_channel(message.guild.id)
         if not auction_data:
-            await message.delete()
+            await message.add_reaction("❌")
             return
 
-        auction_id, msg_id, title, start_price, min_raise, inr_rate, end_time_str = auction_data
+        auction_id, msg_id, title, start_price, min_raise, i_rate, end_time_str = auction_data
+        bid_usd = amount / i_rate if currency == '₹' else amount
         
-        # Convert to USD if needed
-        bid_usd = amount
-        if currency == '₹':
-            bid_usd = amount / inr_rate
-        
-        # Validate bid amount
         highest_bid = await db_handler.get_highest_bid(auction_id)
-        current_max = highest_bid[1] if highest_bid else start_price
+        current_max = highest_bid[1] if highest_bid else (start_price - min_raise) # Fix: next bid must be >= start_price
+        required_bid = current_max + min_raise
         
-        # If it's the first bid, it just needs to be >= start_price
-        # If not, it needs for be >= current_max + min_raise
-        required_bid = current_max + (min_raise if highest_bid else 0)
-        
-        if bid_usd < (required_bid - 0.001): # Small epsilon for float logic
-            await message.delete()
-            try:
-                await message.author.send(f"❌ Your bid of **${bid_usd:.2f}** is too low. The minimum bid required is **${required_bid:.2f}**.")
-            except: pass
+        # Precise comparison
+        if bid_usd < (required_bid - 0.001):
+            await message.add_reaction("❌")
+            next_bid_inr = required_bid * i_rate
+            await message.channel.send(f"❌ {message.author.mention}, your bid of **${bid_usd:.2f}** is too low. Minimum required: **${required_bid:.2f}** (≈₹{next_bid_inr:.2f}).", delete_after=10)
             return
 
-        # VALID BID!
-        # Delete the user message to keep channel clean
-        await message.delete()
-        
-        # Save bid
+        await message.add_reaction("✅")
         await db_handler.add_bid(auction_id, message.author.id, bid_usd)
         
-        # Anti-Snipe: If bid in last 5m, extend 10m
         end_time = datetime.datetime.fromisoformat(end_time_str)
         if end_time.tzinfo is None:
             end_time = end_time.replace(tzinfo=datetime.timezone.utc)
             
         now = datetime.datetime.now(datetime.timezone.utc)
-        time_left = (end_time - now).total_seconds()
-        
-        if 0 < time_left < 300: # 300s = 5m
+        if 0 < (end_time - now).total_seconds() < 300:
             new_end_time = end_time + datetime.timedelta(minutes=10)
             await db_handler.increase_auction_deadline(auction_id, new_end_time.isoformat())
-            end_time = new_end_time # For embed update
+            end_time = new_end_time
             
-        # Update Auction Embed
         try:
-            bid_channel = message.channel
-            main_msg = await bid_channel.fetch_message(msg_id)
+            main_msg = await message.channel.fetch_message(msg_id)
             embed = main_msg.embeds[0]
-            
-            # Update fields
-            # Fields: 0:Starting, 1:MinRaise, 2:INR, 3:Ends, 4:CurrentBid, 5:HighBidder
             embed.set_field_at(3, name="Ends At", value=f"<t:{int(end_time.timestamp())}:F> (<t:{int(end_time.timestamp())}:R>)", inline=False)
-            embed.set_field_at(4, name="Current Bid", value=f"**${bid_usd:.2f}** (₹{bid_usd * inr_rate:.2f})", inline=True)
+            embed.set_field_at(4, name="Current Bid", value=f"**${bid_usd:.2f}** (₹{bid_usd * i_rate:.2f})", inline=True)
             embed.set_field_at(5, name="High Bidder", value=message.author.mention, inline=True)
-            
             await main_msg.edit(embed=embed)
-            await bid_channel.send(f"📈 **New Highest Bid!** {message.author.mention} bid **${bid_usd:.2f}**", delete_after=10)
+            await message.channel.send(f"📈 **New Highest Bid!** {message.author.mention} bid **${bid_usd:.2f}**", delete_after=10)
         except Exception as e:
-            print(f"Error updating auction embed: {e}")
+            print(f"Error updating auction: {e}")
+
+class IncreaseDeadlineModal(discord.ui.Modal, title='Increase Auction Deadline'):
+    duration = discord.ui.TextInput(
+        label='Additional Duration',
+        placeholder='e.g. 1h, 30m, 1h 30m',
+        required=True
+    )
+
+    def __init__(self, auction_id, cog, original_message):
+        super().__init__()
+        self.auction_id = auction_id
+        self.cog = cog
+        self.original_message = original_message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        added_hours = self.cog.parse_duration(self.duration.value)
+        if added_hours <= 0:
+            await interaction.response.send_message("❌ Invalid duration format.", ephemeral=True)
+            return
+
+        async with db_handler.aiosqlite.connect(db_handler.DB_PATH) as db:
+            async with db.execute('SELECT end_time FROM auctions WHERE id = ?', (self.auction_id,)) as cursor:
+                row = await cursor.fetchone()
+                if not row:
+                    await interaction.response.send_message("❌ Auction not found.", ephemeral=True)
+                    return
+                
+                current_end = datetime.datetime.fromisoformat(row[0])
+                if current_end.tzinfo is None:
+                    current_end = current_end.replace(tzinfo=datetime.timezone.utc)
+                
+                new_end = current_end + datetime.timedelta(hours=added_hours)
+                await db_handler.increase_auction_deadline(self.auction_id, new_end.isoformat())
+                
+                try:
+                    embed = self.original_message.embeds[0]
+                    embed.set_field_at(3, name="Ends At", value=f"<t:{int(new_end.timestamp())}:F> (<t:{int(new_end.timestamp())}:R>)", inline=False)
+                    await self.original_message.edit(embed=embed)
+                    await interaction.response.send_message(f"✅ Deadline increased by {self.duration.value}!", ephemeral=True)
+                except Exception as e:
+                    await interaction.response.send_message(f"❌ Failed to update embed: {e}", ephemeral=True)
 
 class AuctionControlView(discord.ui.View):
     def __init__(self, auction_id, cog):
         super().__init__(timeout=None)
         self.auction_id = auction_id
         self.cog = cog
+        # Set persistent custom IDs
+        self.increase_btn.custom_id = f"auc_inc_{auction_id}"
+        self.stop_btn.custom_id = f"auc_stp_{auction_id}"
 
-    @discord.ui.button(label="Increase Deadline (+3h)", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Increase Deadline", style=discord.ButtonStyle.secondary)
     async def increase_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Permission check (Admin only based on config)
         config = await db_handler.get_auction_config(interaction.guild_id)
-        if not config: return
-        _, _, admin_role_id, _ = config
-        
-        member = interaction.user
-        if not member.guild_permissions.administrator and not any(r.id == admin_role_id for r in member.roles):
-            await interaction.response.send_message("❌ Only admins can increase the deadline.", ephemeral=True)
+        if not config or (not interaction.user.guild_permissions.administrator and not any(r.id == config[2] for r in interaction.user.roles)):
+            await interaction.response.send_message("❌ Only admins can use this.", ephemeral=True)
             return
 
-        # Logic to fetch current auction time and add 3h
-        async with db_handler.aiosqlite.connect(db_handler.DB_PATH) as db:
-            async with db.execute('SELECT end_time FROM auctions WHERE id = ?', (self.auction_id,)) as cursor:
-                row = await cursor.fetchone()
-                if not row: return
-                
-                current_end = datetime.datetime.fromisoformat(row[0])
-                if current_end.tzinfo is None:
-                    current_end = current_end.replace(tzinfo=datetime.timezone.utc)
-                
-                new_end = current_end + datetime.timedelta(hours=3)
-                await db_handler.increase_auction_deadline(self.auction_id, new_end.isoformat())
-                
-                # Update embed
-                embed = interaction.message.embeds[0]
-                embed.set_field_at(3, name="Ends At", value=f"<t:{int(new_end.timestamp())}:F> (<t:{int(new_end.timestamp())}:R>)", inline=False)
-                await interaction.message.edit(embed=embed)
-                await interaction.response.send_message(f"✅ Deadline increased by 3 hours!", ephemeral=True)
+        await interaction.response.send_modal(IncreaseDeadlineModal(self.auction_id, self.cog, interaction.message))
 
     @discord.ui.button(label="Stop Auction", style=discord.ButtonStyle.danger)
     async def stop_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Permission check
         config = await db_handler.get_auction_config(interaction.guild_id)
-        if not config: return
-        _, _, admin_role_id, _ = config
-        
-        member = interaction.user
-        if not member.guild_permissions.administrator and not any(r.id == admin_role_id for r in member.roles):
+        if not config or (not interaction.user.guild_permissions.administrator and not any(r.id == config[2] for r in interaction.user.roles)):
             await interaction.response.send_message("❌ Only admins can stop the auction.", ephemeral=True)
             return
 
