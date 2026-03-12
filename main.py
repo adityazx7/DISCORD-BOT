@@ -65,12 +65,13 @@ async def sync(ctx: commands.Context, guilds: commands.Greedy[discord.Object], s
         elif spec == "^":
             ctx.bot.tree.clear_commands(guild=ctx.guild)
             await ctx.bot.tree.sync(guild=ctx.guild)
-            synced = []
+            await ctx.send("🧹 **Cleared all slash commands from this guild.** (They may take a moment to disappear from your menu)")
+            return
         else:
             synced = await ctx.bot.tree.sync()
 
         await ctx.send(
-            f"Synced {len(synced)} commands {'globally' if spec is None else 'to the current guild.'}"
+            f"✅ Synced {len(synced)} commands {'globally' if spec is None else 'to the current guild.'}"
         )
         return
 
