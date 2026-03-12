@@ -172,7 +172,7 @@ async def get_highest_bid(auction_id: int):
 
 async def end_auction(auction_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute('UPDATE auctions SET status = "Ended" WHERE id = ?', (auction_id))
+        await db.execute('UPDATE auctions SET status = "Ended" WHERE id = ?', (auction_id,))
         await db.commit()
 
 async def increase_auction_deadline(auction_id: int, new_end_time):

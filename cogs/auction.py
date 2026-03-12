@@ -412,7 +412,8 @@ class AuctionControlView(discord.ui.View):
         super().__init__(timeout=None)
         self.auction_id = auction_id
         self.cog = cog
-        # Set persistent custom IDs
+        
+        # Explicit custom_ids for persistence across bot restarts
         self.increase_btn.custom_id = f"auc_inc_{auction_id}"
         self.stop_btn.custom_id = f"auc_stp_{auction_id}"
 
@@ -432,8 +433,10 @@ class AuctionControlView(discord.ui.View):
             await interaction.response.send_message("❌ Only admins can stop the auction.", ephemeral=True)
             return
 
+        # Defer to prevent "Interaction failed" while processing DB and message updates
+        await interaction.response.defer(ephemeral=True)
         await self.cog.finalize_auction(self.auction_id, interaction.guild_id, interaction.message.id)
-        await interaction.response.send_message("🛑 Auction stopped manually.", ephemeral=True)
+        await interaction.followup.send("🛑 Auction stopped manually.")
 
 async def setup(bot):
     await bot.add_cog(AuctionCog(bot))
