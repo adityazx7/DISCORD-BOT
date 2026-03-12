@@ -69,8 +69,10 @@ class BumpReminderCog(commands.Cog):
                         description="It has been 2 hours! Please type `/bump` to boost the server again.",
                         color=discord.Color.brand_green()
                     )
-                    reminder_embed.set_image(url="https://i.imgur.com/8Qj8mC1.gif") # Nice aesthetic banner
-                    await bump_channel.send(content=bump_role.mention, embed=reminder_embed)
+                    banner_path = r"C:\Users\AP\.gemini\antigravity\brain\01c6690f-fa0c-4ce5-8bc2-8a5ba3841a39\bump_reminder_banner_1773331934414.png"
+                    file = discord.File(banner_path, filename="banner.png")
+                    reminder_embed.set_image(url="attachment://banner.png")
+                    await bump_channel.send(content=bump_role.mention, embed=reminder_embed, file=file)
 
 async def setup(bot):
     await bot.add_cog(BumpReminderCog(bot))

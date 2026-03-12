@@ -10,6 +10,9 @@ class AuctionCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.auction_cleanup.start()
+        self.hourly_cleanup.start()
+        self.sticky_task.start()
+        self.sticky_message_ids = {} # {channel_id: message_id}
 
     async def cog_load(self):
         """Register persistent views for all active auctions on startup."""
@@ -20,6 +23,8 @@ class AuctionCog(commands.Cog):
 
     def cog_unload(self):
         self.auction_cleanup.cancel()
+        self.hourly_cleanup.cancel()
+        self.sticky_task.cancel()
 
     @tasks.loop(minutes=1.0)
     async def auction_cleanup(self):
@@ -35,6 +40,69 @@ class AuctionCog(commands.Cog):
                 
             if now >= end_time:
                 await self.finalize_auction(auction_id, guild_id, message_id)
+
+    @tasks.loop(hours=1.0)
+    async def hourly_cleanup(self):
+        """Delete messages with ❌ reactions every hour."""
+        configs = await db_handler.get_all_auction_configs()
+        for guild_id, bid_channel_id, _, _, _ in configs:
+            guild = self.bot.get_guild(guild_id)
+            if not guild: continue
+            channel = guild.get_channel(bid_channel_id)
+            if not channel: continue
+            
+            try:
+                async for message in channel.history(limit=100):
+                    if any(str(reaction.emoji) == "❌" for reaction in message.reactions):
+                        await message.delete()
+            except:
+                pass
+
+    @tasks.loop(seconds=30)
+    async def sticky_task(self):
+        """Ensure a sticky info message is at the bottom of auction channels."""
+        configs = await db_handler.get_all_auction_configs()
+        for guild_id, bid_channel_id, _, _, _ in configs:
+            guild = self.bot.get_guild(guild_id)
+            if not guild: continue
+            channel = guild.get_channel(bid_channel_id)
+            if not channel: continue
+            
+            # Check if there's an active auction
+            auction = await db_handler.get_auction_by_channel(guild_id)
+            if not auction: continue
+            
+            embed = discord.Embed(
+                title="📌 How to Bid",
+                description=(
+                    "• **Format**: `100$` or `8000₹`\n"
+                    "• **Rules**: Type `/auction-rules` to read all terms.\n"
+                    "• **Validity**: Wait for ✅ reaction. ❌ means your bid was invalid."
+                ),
+                color=discord.Color.blue()
+            )
+            
+            last_msg_id = self.sticky_message_ids.get(bid_channel_id)
+            is_at_bottom = False
+            
+            try:
+                # Check if our sticky is the last message
+                async for last_msg in channel.history(limit=1):
+                    if last_msg_id and last_msg.id == last_msg_id:
+                        is_at_bottom = True
+                    break
+                
+                if not is_at_bottom:
+                    if last_msg_id:
+                        try:
+                            old_msg = await channel.fetch_message(last_msg_id)
+                            await old_msg.delete()
+                        except: pass
+                    
+                    new_msg = await channel.send(embed=embed)
+                    self.sticky_message_ids[bid_channel_id] = new_msg.id
+            except:
+                pass
 
     async def finalize_auction(self, auction_id, guild_id, message_id):
         """Mark auction as ended and update the embed."""
@@ -245,7 +313,11 @@ class AuctionCog(commands.Cog):
         
         if not match:
             await message.add_reaction("❌")
-            await message.channel.send(f"❌ {message.author.mention}, you can only post bids following `50$` or `5000₹` format! Plain numbers or symbols at the start are not allowed.", delete_after=10)
+            error_msg = f"❌ {message.author.mention}, invalid format! Only `50$` or `5000₹` allowed. (Deleting this in 10s)"
+            await message.channel.send(error_msg, delete_after=10)
+            try:
+                await message.author.send(f"⚠️ **Auction Alert**: In #{message.channel.name}, your bid was rejected because of the wrong format. Please use `100$` or `8000₹`.")
+            except: pass
             return
 
         amount = float(match.group(1))
@@ -278,8 +350,8 @@ class AuctionCog(commands.Cog):
             end_time = end_time.replace(tzinfo=datetime.timezone.utc)
             
         now = datetime.datetime.now(datetime.timezone.utc)
-        if 0 < (end_time - now).total_seconds() < 300:
-            new_end_time = end_time + datetime.timedelta(minutes=10)
+        if 0 < (end_time - now).total_seconds() < 180: # 180s = 3m
+            new_end_time = end_time + datetime.timedelta(minutes=3)
             await db_handler.increase_auction_deadline(auction_id, new_end_time.isoformat())
             end_time = new_end_time
             
