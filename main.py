@@ -34,6 +34,17 @@ class StoreBot(commands.Bot):
                 except Exception as e:
                     print(f"Failed to load {filename}: {e}")
 
+    async def reload_cogs(self):
+        """Helper to reload all extensions from the cogs folder."""
+        for filename in os.listdir("./cogs"):
+            if filename.endswith(".py") and filename != "__init__.py":
+                try:
+                    await self.reload_extension(f"cogs.{filename[:-3]}")
+                except commands.ExtensionNotLoaded:
+                    await self.load_extension(f"cogs.{filename[:-3]}")
+                except Exception as e:
+                    print(f"Failed to reload {filename}: {e}")
+
         # Syncing is now handled manually via the !sync command to prevent duplication issues
         # print("Syncing slash commands...")
         # await self.tree.sync()
@@ -70,21 +81,18 @@ async def sync(ctx: commands.Context, guilds: commands.Greedy[discord.Object], s
         elif spec == "*":
             ctx.bot.tree.copy_global_to(guild=ctx.guild)
             synced = await ctx.bot.tree.sync(guild=ctx.guild)
-        elif spec == "^":
-            ctx.bot.tree.clear_commands(guild=ctx.guild)
-            await ctx.bot.tree.sync(guild=ctx.guild)
-            await ctx.send("🧹 **Cleared all slash commands from this guild.** (They may take a moment to disappear from your menu)")
-            return
         elif spec == "!!":
             ctx.bot.tree.clear_commands(guild=None)
             await ctx.bot.tree.sync()
-            await ctx.send("🌐 **Cleared all GLOBAL slash commands.** (These can take up to 1 hour to fully disappear from Discord's cache)")
+            await ctx.bot.reload_cogs() # Put them back in memory so they aren't lost
+            await ctx.send("🌐 **GLOBAL commands cleared from Discord.**\n⚠️ **Note**: These will still show in your menu for up to 1 hour because of Discord's cache.\n✅ **Bot memory reloaded**: You can now run `!sync ~` to keep your guild commands active.")
             return
         else:
             synced = await ctx.bot.tree.sync()
 
         await ctx.send(
-            f"✅ Synced {len(synced)} commands {'globally' if spec is None else 'to the current guild.'}"
+            f"✅ Synced {len(synced)} commands {'globally' if spec is None else 'to the current guild.'}\n"
+            f"{'🕒 *Note: Global changes can take 1 hour to appear/disappear.*' if spec is None or spec == '!!' else '⚡ *Note: Guild sync is instant.*'}"
         )
         return
 
