@@ -73,8 +73,8 @@ class AuctionCog(commands.Cog):
             embed = discord.Embed(
                 title="📌 Bidding Instructions",
                 description=(
-                    "• **To Bid**: Click the **'Place Bid'** button below!\n"
-                    "• **Format**: `100$` or `8000₹`\n"
+                    "• **To Bid**: Simply type your bid in this channel!\n"
+                    "• **Format**: `100$` or `8000₹` (Must include symbol)\n"
                     "• **Rules**: Type `/auction-rules` to read all terms."
                 ),
                 color=discord.Color.blue()
@@ -221,86 +221,6 @@ class AuctionCog(commands.Cog):
         cleaned = re.sub(r'[^\d.]', '', duration_str)
         return float(cleaned) if cleaned else 0.0
 
-    @app_commands.command(name="bid", description="Place a bid privately")
-    @app_commands.describe(amount="Your bid amount (e.g. 100$ or 8000₹)")
-    async def bid_cmd(self, interaction: discord.Interaction, amount: str):
-        auction = await db_handler.get_auction_by_channel(interaction.guild_id)
-        if not auction:
-            await interaction.response.send_message("❌ There is no active auction in this guild.", ephemeral=True)
-            return
-        
-        auction_id, message_id, _, _, _, _, _ = auction
-        channel_id = (await db_handler.get_auction_config(interaction.guild_id))[0]
-        channel = self.bot.get_channel(channel_id)
-        if not channel:
-            await interaction.response.send_message("❌ Auction channel not found.", ephemeral=True)
-            return
-            
-        try:
-            msg = await channel.fetch_message(message_id)
-            await self.process_bid(interaction, auction_id, amount, msg)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Failed to process bid: {e}", ephemeral=True)
-
-    async def process_bid(self, interaction: discord.Interaction, auction_id: int, bid_str: str, auction_msg: discord.Message):
-        """Unified logic for processing a bid from Modal or Slash Command."""
-        content = bid_str.strip()
-        match = re.search(r'(\d+(\.\d+)?)\s*([$₹])', content)
-        
-        if not match:
-            await interaction.response.send_message(f"❌ Invalid format! Please use `50$` or `5000₹`.", ephemeral=True)
-            return
-
-        amount = float(match.group(1))
-        currency = match.group(3)
-        
-        # Fresh data fetch
-        async with aiosqlite.connect(db_handler.DB_PATH) as db:
-            async with db.execute('SELECT start_price, min_raise, inr_rate, end_time, title FROM auctions WHERE id = ?', (auction_id,)) as cursor:
-                auction_data = await cursor.fetchone()
-        
-        if not auction_data:
-            await interaction.response.send_message("❌ This auction no longer exists.", ephemeral=True)
-            return
-
-        start_price, min_raise, i_rate, end_time_str, title = auction_data
-        bid_usd = amount / i_rate if currency == '₹' else amount
-        
-        highest_bid = await db_handler.get_highest_bid(auction_id)
-        current_max = highest_bid[1] if highest_bid else (start_price - min_raise)
-        required_bid = current_max + min_raise
-        
-        if bid_usd < (required_bid - 0.001):
-            next_bid_inr = required_bid * i_rate
-            await interaction.response.send_message(f"❌ Your bid of **${bid_usd:.2f}** is too low. Minimum required: **${required_bid:.2f}** (≈₹{next_bid_inr:.2f}).", ephemeral=True)
-            return
-
-        # Valid bid!
-        await db_handler.add_bid(auction_id, interaction.user.id, bid_usd)
-        
-        end_time = datetime.datetime.fromisoformat(end_time_str)
-        if end_time.tzinfo is None:
-            end_time = end_time.replace(tzinfo=datetime.timezone.utc)
-            
-        now = datetime.datetime.now(datetime.timezone.utc)
-        if 0 < (end_time - now).total_seconds() < 180:
-            end_time = end_time + datetime.timedelta(minutes=3)
-            await db_handler.increase_auction_deadline(auction_id, end_time.isoformat())
-
-        # Update the main message
-        try:
-            embed = auction_msg.embeds[0]
-            embed.set_field_at(3, name="Ends At", value=f"<t:{int(end_time.timestamp())}:F> (<t:{int(end_time.timestamp())}:R>)", inline=False)
-            embed.set_field_at(4, name="Current Bid", value=f"**${bid_usd:.2f}** (₹{bid_usd * i_rate:.2f})", inline=True)
-            embed.set_field_at(5, name="High Bidder", value=interaction.user.mention, inline=True)
-            await auction_msg.edit(embed=embed)
-            
-            # Channel notification
-            await interaction.channel.send(f"📈 **New Highest Bid!** {interaction.user.mention} bid **${bid_usd:.2f}**")
-            await interaction.response.send_message(f"✅ Your bid of **${bid_usd:.2f}** was placed successfully!", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Bid recorded but failed to update embed: {e}", ephemeral=True)
-
     @app_commands.command(name="create-auction", description="Start a new auction")
     @app_commands.describe(
         title="Title of the auction",
@@ -381,19 +301,18 @@ class AuctionCog(commands.Cog):
         if message.channel.id != bid_channel_id:
             return
 
-        if message.author.guild_permissions.administrator or any(r.id == mod_role_id for r in message.author.roles):
-            return
-
+        # Admins/Mods can bid, but they are ignored if they type plain text that isn't a bid
         content = message.content.strip()
         match = re.search(r'(\d+(\.\d+)?)\s*([$₹])', content)
         
         if not match:
-            await message.add_reaction("❌")
-            try:
-                await message.author.send(f"⚠️ **Auction Alert**: In #{message.channel.name}, your bid was rejected because of the wrong format. Please use **`100$`** or **`8000₹`**. \n\n**Tip**: Use the **'Place Bid'** button in the channel to bid privately!")
-            except:
-                # Fallback if DMs are closed
-                await message.channel.send(f"❌ {message.author.mention}, wrong format! Use `100$` or `8000₹`. Use the **'Place Bid'** button for private bidding.", delete_after=5)
+            # If not a staff member, error out with ❌. If it is staff, they might just be talking.
+            if not (message.author.guild_permissions.administrator or any(r.id == mod_role_id for r in message.author.roles)):
+                await message.add_reaction("❌")
+                try:
+                    await message.author.send(f"⚠️ **Auction Alert**: In #{message.channel.name}, your bid was rejected because of the wrong format. Please use **`100$`** or **`8000₹`**.")
+                except:
+                    await message.channel.send(f"❌ {message.author.mention}, wrong format! Use `100$` or `8000₹`.", delete_after=5)
             return
 
         amount = float(match.group(1))
@@ -401,21 +320,19 @@ class AuctionCog(commands.Cog):
         
         auction_data = await db_handler.get_auction_by_channel(message.guild.id)
         if not auction_data:
-            await message.add_reaction("❌")
             return
 
         auction_id, msg_id, title, start_price, min_raise, i_rate, end_time_str = auction_data
         bid_usd = amount / i_rate if currency == '₹' else amount
         
         highest_bid = await db_handler.get_highest_bid(auction_id)
-        current_max = highest_bid[1] if highest_bid else (start_price - min_raise) # Fix: next bid must be >= start_price
+        current_max = highest_bid[1] if highest_bid else (start_price - min_raise)
         required_bid = current_max + min_raise
         
-        # Precise comparison
         if bid_usd < (required_bid - 0.001):
             await message.add_reaction("❌")
             next_bid_inr = required_bid * i_rate
-            await message.channel.send(f"❌ {message.author.mention}, your bid of **${bid_usd:.2f}** is too low. Minimum required: **${required_bid:.2f}** (≈₹{next_bid_inr:.2f}).", delete_after=10)
+            await message.channel.send(f"❌ {message.author.mention}, bid too low! Min: **${required_bid:.2f}** (≈₹{next_bid_inr:.2f}).", delete_after=10)
             return
 
         await message.add_reaction("✅")
@@ -426,7 +343,7 @@ class AuctionCog(commands.Cog):
             end_time = end_time.replace(tzinfo=datetime.timezone.utc)
             
         now = datetime.datetime.now(datetime.timezone.utc)
-        if 0 < (end_time - now).total_seconds() < 180: # 180s = 3m
+        if 0 < (end_time - now).total_seconds() < 180:
             new_end_time = end_time + datetime.timedelta(minutes=3)
             await db_handler.increase_auction_deadline(auction_id, new_end_time.isoformat())
             end_time = new_end_time
@@ -441,23 +358,6 @@ class AuctionCog(commands.Cog):
             await message.channel.send(f"📈 **New Highest Bid!** {message.author.mention} bid **${bid_usd:.2f}**", delete_after=10)
         except Exception as e:
             print(f"Error updating auction: {e}")
-
-class PlaceBidModal(discord.ui.Modal, title='Place Your Bid'):
-    bid_input = discord.ui.TextInput(
-        label='Bid Amount',
-        placeholder='e.g. 100$ or 8000₹',
-        required=True,
-        min_length=2
-    )
-
-    def __init__(self, auction_id, cog, auction_msg):
-        super().__init__()
-        self.auction_id = auction_id
-        self.cog = cog
-        self.auction_msg = auction_msg
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await self.cog.process_bid(interaction, self.auction_id, self.bid_input.value, self.auction_msg)
 
 class IncreaseDeadlineModal(discord.ui.Modal, title='Increase Auction Deadline'):
     duration = discord.ui.TextInput(
@@ -506,13 +406,8 @@ class AuctionControlView(discord.ui.View):
         self.auction_id = auction_id
         self.cog = cog
         # Set persistent custom IDs for across restarts
-        self.place_bid_btn.custom_id = f"auc_bid_{auction_id}"
         self.increase_btn.custom_id = f"auc_inc_{auction_id}"
         self.stop_btn.custom_id = f"auc_stp_{auction_id}"
-
-    @discord.ui.button(label="Place Bid", style=discord.ButtonStyle.primary, emoji="📈")
-    async def place_bid_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PlaceBidModal(self.auction_id, self.cog, interaction.message))
 
     @discord.ui.button(label="Increase Deadline", style=discord.ButtonStyle.secondary)
     async def increase_btn(self, interaction: discord.Interaction, button: discord.ui.Button):

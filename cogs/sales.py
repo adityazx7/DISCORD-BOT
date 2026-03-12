@@ -1,7 +1,6 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from discord import app_commands
 
 class SoldButtonView(discord.ui.View):
     def __init__(self, author_id: int):

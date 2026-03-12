@@ -42,6 +42,14 @@ async def init_db():
             )
         ''')
         await db.execute('''
+            CREATE TABLE IF NOT EXISTS welcome_config (
+                guild_id INTEGER PRIMARY KEY,
+                channel_id INTEGER,
+                shop_channel_id INTEGER,
+                support_channel_id INTEGER
+            )
+        ''')
+        await db.execute('''
             CREATE TABLE IF NOT EXISTS auctions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 guild_id INTEGER NOT NULL,
@@ -102,7 +110,7 @@ async def add_warning(user_id: int, guild_id: int, admin_id: int, reason: str):
 async def get_user_warnings(user_id: int, guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute('''
-            SELECT admin_id, reason, timestamp FROM warnings 
+            SELECT admin_id, reason, timestamp FROM warnings WHERE user_id = ? AND guild_id = ?
             ''', (user_id, guild_id)) as cursor:
             return await cursor.fetchall()
 
@@ -123,6 +131,20 @@ async def set_bump_config(guild_id: int, channel_id: int | None = None, role_id:
             await db.execute('UPDATE bump_config SET channel_id = ?, role_id = ? WHERE guild_id = ?', (new_chan, new_role, guild_id))
         else:
             await db.execute('INSERT INTO bump_config (guild_id, channel_id, role_id) VALUES (?, ?, ?)', (guild_id, channel_id, role_id))
+        await db.commit()
+
+# --- Welcome Config Functions ---
+async def get_welcome_config(guild_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT channel_id, shop_channel_id, support_channel_id FROM welcome_config WHERE guild_id = ?', (guild_id,)) as cursor:
+            return await cursor.fetchone()
+
+async def set_welcome_config(guild_id: int, channel_id: int, shop_id: int | None = None, support_id: int | None = None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            INSERT OR REPLACE INTO welcome_config (guild_id, channel_id, shop_channel_id, support_channel_id)
+            VALUES (?, ?, ?, ?)
+        ''', (guild_id, channel_id, shop_id, support_id))
         await db.commit()
 
 # --- Auction Functions ---

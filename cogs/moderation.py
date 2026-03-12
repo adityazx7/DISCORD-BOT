@@ -103,5 +103,34 @@ class ModerationCog(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"An error occurred: {e}", ephemeral=True)
 
+    @app_commands.command(name="warnings", description="View a member's warning history")
+    @app_commands.describe(target="The member to check")
+    async def view_warnings(self, interaction: discord.Interaction, target: discord.Member):
+        try:
+            warnings = await db_handler.get_user_warnings(target.id, interaction.guild.id)
+            
+            if not warnings:
+                await interaction.response.send_message(f"✅ **{target.name}** has a clean record (no warnings).", ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title=f"Warning History: {target.name}",
+                color=discord.Color.gold()
+            )
+            embed.set_thumbnail(url=target.display_avatar.url)
+            
+            for i, (admin_id, reason, timestamp) in enumerate(warnings, 1):
+                admin = interaction.guild.get_member(admin_id)
+                admin_name = admin.name if admin else f"Unknown Admin (ID: {admin_id})"
+                embed.add_field(
+                    name=f"Warning #{i}",
+                    value=f"**Reason:** {reason}\n**By:** {admin_name}\n**Date:** {timestamp}",
+                    inline=False
+                )
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"An error occurred: {e}", ephemeral=True)
+
 async def setup(bot):
     await bot.add_cog(ModerationCog(bot))
