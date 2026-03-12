@@ -90,33 +90,52 @@ class AuctionCog(commands.Cog):
             
             # Post rules if channel provided
             if rules_channel:
-                rules_embed = discord.Embed(
-                    title="📜 Auction Rules",
-                    description=(
-                        "1. Only bid if you intend to pay.\n"
-                        "2. Bids must use `$` or `₹` signs.\n"
-                        "3. Anti-Snipe: Bids in last 5m extend the timer by 10m.\n"
-                        "4. Respect the minimum raise requirement.\n"
-                        "5. Failure to follow rules may result in a ban."
-                    ),
-                    color=discord.Color.gold()
+                rules_text = (
+                    "### 📜 OFFICIAL AUCTION RULES\n\n"
+                    "**1. General Conduct**\n"
+                    "• **No Fake Bidding**: Do not bid if you do not have the funds ready. Backing out of a winning bid will result in an immediate and permanent ban.\n"
+                    "• **No Bid Retractions**: Once a bid is placed, it is final. Think before you type.\n"
+                    "• **Verification Required**: All sellers must provide account details to Admin before starting. Auction won't stop once started if account owner says.\n\n"
+                    "**2. COMMISSION**\n"
+                    "• **10%** of the final sale price must go to the Server Owner for facilitating the auction.\n\n"
+                    "**3. The Bidding Process**\n"
+                    "• **Format**: Bids must follow `50$` or `5000₹` format ONLY. Plain numbers are rejected.\n"
+                    "• **Increments**: Respect the Minimum Bid Increment set for each auction.\n"
+                    "• **Starting Bid (SB)**: Agreed upon with the seller before the auction goes live.\n\n"
+                    "**4. Anti-Snipe Protection**\n"
+                    "• If a bid is placed within the **last 5 minutes**, the timer is automatically extended by **10 minutes**.\n\n"
+                    "**5. Payment & Middleman (MM)**\n"
+                    "• **Payment Window**: Winners must contact the ADMIN and initiate payment within 24 hours.\n\n"
+                    "**6. Restrictions**\n"
+                    "• STEAM LINKED OPBR ACCOUNTS WONT BE PUT ON AUCTION."
                 )
+                rules_embed = discord.Embed(
+                    title="Auction Terms & Conditions",
+                    description=rules_text,
+                    color=discord.Color.dark_gold()
+                )
+                rules_embed.set_footer(text="By bidding, you agree to all rules above.")
                 await rules_channel.send(embed=rules_embed)
                 
         except Exception as e:
             await interaction.response.send_message(f"❌ Setup failed: {e}", ephemeral=True)
 
+    def parse_numeric(self, val_str: str) -> float:
+        """Helper to extract float from strings like '1$', '5h', '83.50₹'"""
+        cleaned = re.sub(r'[^\d.]', '', val_str)
+        return float(cleaned) if cleaned else 0.0
+
     @app_commands.command(name="create-auction", description="Start a new auction")
     @app_commands.describe(
         title="Title of the auction",
         details="Details about the account",
-        starting_price="Starting price in USD",
-        min_raise="Minimum raise amount in USD",
-        hours="Duration in hours",
-        inr_rate="Conversion rate (1 USD = X INR)",
+        starting_price="Starting price (e.g. 1$)",
+        min_raise="Minimum raise (e.g. 0.5$)",
+        hours="Duration (e.g. 5 or 5h)",
+        inr_rate="Conversion rate (e.g. 100 or 100₹)",
         image="Optional image of the account"
     )
-    async def create_auction(self, interaction: discord.Interaction, title: str, details: str, starting_price: float, min_raise: float, hours: int, inr_rate: float, image: discord.Attachment | None = None):
+    async def create_auction(self, interaction: discord.Interaction, title: str, details: str, starting_price: str, min_raise: str, hours: str, inr_rate: str, image: discord.Attachment | None = None):
         # Permission check
         config = await db_handler.get_auction_config(interaction.guild_id)
         if not config:
@@ -129,6 +148,19 @@ class AuctionCog(commands.Cog):
             await interaction.response.send_message("❌ You don't have permission to start auctions.", ephemeral=True)
             return
 
+        # Parse inputs
+        try:
+            s_price = self.parse_numeric(starting_price)
+            m_raise = self.parse_numeric(min_raise)
+            h_val = self.parse_numeric(hours)
+            i_rate = self.parse_numeric(inr_rate)
+            
+            if s_price <= 0 or h_val <= 0 or i_rate <= 0:
+                raise ValueError("Values must be greater than zero.")
+        except Exception:
+            await interaction.response.send_message("❌ Invalid numbers. Please provide values like `1$`, `5h`, or `100₹`.", ephemeral=True)
+            return
+
         bid_channel_id = config[0]
         channel = interaction.guild.get_channel(bid_channel_id)
         if not channel:
@@ -137,11 +169,11 @@ class AuctionCog(commands.Cog):
 
         # Time calculation
         now = datetime.datetime.now(datetime.timezone.utc)
-        end_time = now + datetime.timedelta(hours=hours)
+        end_time = now + datetime.timedelta(hours=h_val)
         
         # Save to DB
         auction_id = await db_handler.create_auction(
-            interaction.guild_id, title, details, starting_price, min_raise, inr_rate, end_time.isoformat()
+            interaction.guild_id, title, details, s_price, m_raise, i_rate, end_time.isoformat()
         )
         
         # Create Embed
@@ -149,11 +181,10 @@ class AuctionCog(commands.Cog):
             title=f"🟢 ACTIVE AUCTION: {title}",
             description=details,
             color=discord.Color.green(),
-            timestamp=end_time
         )
-        embed.add_field(name="Starting Price", value=f"${starting_price:.2f}", inline=True)
-        embed.add_field(name="Minimum Raise", value=f"${min_raise:.2f}", inline=True)
-        embed.add_field(name="INR Rate", value=f"$1 = ₹{inr_rate:.2f}", inline=True)
+        embed.add_field(name="Starting Price", value=f"${s_price:.2f}", inline=True)
+        embed.add_field(name="Minimum Raise", value=f"${m_raise:.2f}", inline=True)
+        embed.add_field(name="INR Rate", value=f"$1 = ₹{i_rate:.2f}", inline=True)
         embed.add_field(name="Ends At", value=f"<t:{int(end_time.timestamp())}:F> (<t:{int(end_time.timestamp())}:R>)", inline=False)
         embed.add_field(name="Current Bid", value="None", inline=True)
         embed.add_field(name="High Bidder", value="None", inline=True)
@@ -187,18 +218,18 @@ class AuctionCog(commands.Cog):
         # Member moderation: Check if it's a valid bid
         content = message.content.strip()
         
-        # Regex to find $ or ₹ followed by number
-        match = re.search(r'([$₹])\s?(\d+(\.\d+)?)', content)
+        # Regex to find number followed by $ or ₹ (user's format: 50$ or 5000₹)
+        match = re.search(r'(\d+(\.\d+)?)\s*([$₹])', content)
         
         if not match:
             await message.delete()
             try:
-                await message.author.send("❌ In the bidding channel, you can only post bids. Example: `$100` or `₹8000`. Plain numbers are not allowed.")
+                await message.author.send("❌ In the bidding channel, you can only post bids. Example: `100$` or `8000₹`. Plain numbers or currency at the start are not allowed.")
             except: pass
             return
 
-        currency = match.group(1)
-        amount = float(match.group(2))
+        amount = float(match.group(1))
+        currency = match.group(3)
         
         # Get active auction
         auction_data = await db_handler.get_auction_by_channel(message.guild.id)
@@ -221,7 +252,7 @@ class AuctionCog(commands.Cog):
         # If not, it needs for be >= current_max + min_raise
         required_bid = current_max + (min_raise if highest_bid else 0)
         
-        if bid_usd < required_bid:
+        if bid_usd < (required_bid - 0.001): # Small epsilon for float logic
             await message.delete()
             try:
                 await message.author.send(f"❌ Your bid of **${bid_usd:.2f}** is too low. The minimum bid required is **${required_bid:.2f}**.")
