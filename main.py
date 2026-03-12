@@ -34,10 +34,10 @@ class StoreBot(commands.Bot):
                 except Exception as e:
                     print(f"Failed to load {filename}: {e}")
 
-        # Sync app commands
-        print("Syncing slash commands...")
-        await self.tree.sync()
-        print("Slash commands synced.")
+        # Syncing is now handled manually via the !sync command to prevent duplication issues
+        # print("Syncing slash commands...")
+        # await self.tree.sync()
+        # print("Slash commands synced.")
 
 bot = StoreBot()
 
