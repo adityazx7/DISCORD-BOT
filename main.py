@@ -61,6 +61,7 @@ async def sync(ctx: commands.Context, guilds: commands.Greedy[discord.Object], s
       !sync ~    -> Current guild sync (Instant, best for your server)
       !sync *    -> Copies global to guild (Causes duplicates! Avoid this)
       !sync ^    -> Clears guild commands (Use this to fix duplicates)
+      !sync !!   -> Clears GLOBAL commands (Fixes duplicates permanently)
     """
     if not guilds:
         if spec == "~":
@@ -73,6 +74,11 @@ async def sync(ctx: commands.Context, guilds: commands.Greedy[discord.Object], s
             ctx.bot.tree.clear_commands(guild=ctx.guild)
             await ctx.bot.tree.sync(guild=ctx.guild)
             await ctx.send("🧹 **Cleared all slash commands from this guild.** (They may take a moment to disappear from your menu)")
+            return
+        elif spec == "!!":
+            ctx.bot.tree.clear_commands(guild=None)
+            await ctx.bot.tree.sync()
+            await ctx.send("🌐 **Cleared all GLOBAL slash commands.** (These can take up to 1 hour to fully disappear from Discord's cache)")
             return
         else:
             synced = await ctx.bot.tree.sync()
