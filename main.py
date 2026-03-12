@@ -49,15 +49,22 @@ async def on_ready():
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def sync(ctx: commands.Context, guilds: commands.Greedy[discord.Object], spec: str = None) -> None:
-    """Syncs the slash commands array to the current guild.
-    Usage:
-      !sync -> global sync
-      !sync ~ -> sync current guild
-      !sync * -> copies all global app commands to current guild and syncs
-      !sync ^ -> clears all commands from the current guild target and syncs
+    """
+    Syncs the slash commands array.
+    
+    HOW TO FIX DUPLICATE COMMANDS:
+    1. !sync ^   (Clears all commands from this guild)
+    2. !sync ~   (Registers them to ONLY this guild - instant & no duplicates)
+    
+    Flags:
+      !sync      -> Global sync (Can take 1 hour, use only for final release)
+      !sync ~    -> Current guild sync (Instant, best for your server)
+      !sync *    -> Copies global to guild (Causes duplicates! Avoid this)
+      !sync ^    -> Clears guild commands (Use this to fix duplicates)
     """
     if not guilds:
         if spec == "~":
+            ctx.bot.tree.copy_global_to(guild=ctx.guild)
             synced = await ctx.bot.tree.sync(guild=ctx.guild)
         elif spec == "*":
             ctx.bot.tree.copy_global_to(guild=ctx.guild)
