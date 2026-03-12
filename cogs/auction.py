@@ -33,7 +33,6 @@ class AuctionCog(commands.Cog):
         now = datetime.datetime.now(datetime.timezone.utc)
         
         for auction_id, guild_id, message_id, end_time_str in active_auctions:
-            # Database stores ISO format strings for datetime
             end_time = datetime.datetime.fromisoformat(end_time_str)
             if end_time.tzinfo is None:
                 end_time = end_time.replace(tzinfo=datetime.timezone.utc)
@@ -43,66 +42,62 @@ class AuctionCog(commands.Cog):
 
     @tasks.loop(hours=1.0)
     async def hourly_cleanup(self):
-        """Delete messages with ❌ reactions every hour."""
-        configs = await db_handler.get_all_auction_configs()
-        for guild_id, bid_channel_id, _, _, _ in configs:
-            guild = self.bot.get_guild(guild_id)
-            if not guild: continue
-            channel = guild.get_channel(bid_channel_id)
-            if not channel: continue
-            
-            try:
-                async for message in channel.history(limit=100):
-                    if any(str(reaction.emoji) == "❌" for reaction in message.reactions):
-                        await message.delete()
-            except:
-                pass
+        """Delete messages with ❌ reactions every hour to keep the channel clean."""
+        active_auctions = await db_handler.get_all_active_auctions()
+        scanned_channels = set()
+        for _, guild_id, _, _ in active_auctions:
+            config = await db_handler.get_auction_config(guild_id)
+            if config and config[0] not in scanned_channels:
+                scanned_channels.add(config[0])
+                channel = self.bot.get_channel(config[0])
+                if channel:
+                    try:
+                        async for msg in channel.history(limit=100):
+                            if any(str(r.emoji) == "❌" for r in msg.reactions):
+                                await msg.delete()
+                    except: pass
 
-    @tasks.loop(seconds=30)
+    @tasks.loop(seconds=60)
     async def sticky_task(self):
         """Ensure a sticky info message is at the bottom of auction channels."""
-        configs = await db_handler.get_all_auction_configs()
-        for guild_id, bid_channel_id, _, _, _ in configs:
-            guild = self.bot.get_guild(guild_id)
-            if not guild: continue
-            channel = guild.get_channel(bid_channel_id)
+        active_auctions = await db_handler.get_all_active_auctions()
+        for _, guild_id, _, _ in active_auctions:
+            config = await db_handler.get_auction_config(guild_id)
+            if not config: continue
+            
+            bid_channel_id = config[0]
+            channel = self.bot.get_channel(bid_channel_id)
             if not channel: continue
-            
-            # Check if there's an active auction
-            auction = await db_handler.get_auction_by_channel(guild_id)
-            if not auction: continue
-            
+
             embed = discord.Embed(
-                title="📌 How to Bid",
+                title="📌 Bidding Instructions",
                 description=(
+                    "• **To Bid**: Click the **'Place Bid'** button below!\n"
                     "• **Format**: `100$` or `8000₹`\n"
-                    "• **Rules**: Type `/auction-rules` to read all terms.\n"
-                    "• **Validity**: Wait for ✅ reaction. ❌ means your bid was invalid."
+                    "• **Rules**: Type `/auction-rules` to read all terms."
                 ),
                 color=discord.Color.blue()
             )
             
-            last_msg_id = self.sticky_message_ids.get(bid_channel_id)
-            is_at_bottom = False
-            
+            last_id = self.sticky_message_ids.get(bid_channel_id)
+            is_last = False
             try:
-                # Check if our sticky is the last message
+                # Check if our sticky message is still the most recent
                 async for last_msg in channel.history(limit=1):
-                    if last_msg_id and last_msg.id == last_msg_id:
-                        is_at_bottom = True
+                    if last_id and last_msg.id == last_id:
+                        is_last = True
                     break
                 
-                if not is_at_bottom:
-                    if last_msg_id:
+                if not is_last:
+                    if last_id:
                         try:
-                            old_msg = await channel.fetch_message(last_msg_id)
-                            await old_msg.delete()
+                            old = await channel.fetch_message(last_id)
+                            await old.delete()
                         except: pass
                     
                     new_msg = await channel.send(embed=embed)
                     self.sticky_message_ids[bid_channel_id] = new_msg.id
-            except:
-                pass
+            except: pass
 
     async def finalize_auction(self, auction_id, guild_id, message_id):
         """Mark auction as ended and update the embed."""
@@ -366,6 +361,78 @@ class AuctionCog(commands.Cog):
         except Exception as e:
             print(f"Error updating auction: {e}")
 
+class PlaceBidModal(discord.ui.Modal, title='Place Your Bid'):
+    bid_input = discord.ui.TextInput(
+        label='Bid Amount',
+        placeholder='e.g. 100$ or 8000₹',
+        required=True,
+        min_length=2
+    )
+
+    def __init__(self, auction_id, cog, auction_msg):
+        super().__init__()
+        self.auction_id = auction_id
+        self.cog = cog
+        self.auction_msg = auction_msg
+
+    async def on_submit(self, interaction: discord.Interaction):
+        content = self.bid_input.value.strip()
+        match = re.search(r'(\d+(\.\d+)?)\s*([$₹])', content)
+        
+        if not match:
+            await interaction.response.send_message(f"❌ Invalid format! Please use `50$` or `5000₹`.", ephemeral=True)
+            return
+
+        amount = float(match.group(1))
+        currency = match.group(3)
+        
+        # Fresh data fetch
+        async with db_handler.aiosqlite.connect(db_handler.DB_PATH) as db:
+            async with db.execute('SELECT start_price, min_raise, inr_rate, end_time, title FROM auctions WHERE id = ?', (self.auction_id,)) as cursor:
+                auction_data = await cursor.fetchone()
+        
+        if not auction_data:
+            await interaction.response.send_message("❌ This auction no longer exists.", ephemeral=True)
+            return
+
+        start_price, min_raise, i_rate, end_time_str, title = auction_data
+        bid_usd = amount / i_rate if currency == '₹' else amount
+        
+        highest_bid = await db_handler.get_highest_bid(self.auction_id)
+        current_max = highest_bid[1] if highest_bid else (start_price - min_raise)
+        required_bid = current_max + min_raise
+        
+        if bid_usd < (required_bid - 0.001):
+            next_bid_inr = required_bid * i_rate
+            await interaction.response.send_message(f"❌ Your bid of **${bid_usd:.2f}** is too low. Minimum required: **${required_bid:.2f}** (≈₹{next_bid_inr:.2f}).", ephemeral=True)
+            return
+
+        # Valid bid!
+        await db_handler.add_bid(self.auction_id, interaction.user.id, bid_usd)
+        
+        end_time = datetime.datetime.fromisoformat(end_time_str)
+        if end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=datetime.timezone.utc)
+            
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if 0 < (end_time - now).total_seconds() < 180:
+            end_time = end_time + datetime.timedelta(minutes=3)
+            await db_handler.increase_auction_deadline(self.auction_id, end_time.isoformat())
+
+        # Update the main message
+        try:
+            embed = self.auction_msg.embeds[0]
+            embed.set_field_at(3, name="Ends At", value=f"<t:{int(end_time.timestamp())}:F> (<t:{int(end_time.timestamp())}:R>)", inline=False)
+            embed.set_field_at(4, name="Current Bid", value=f"**${bid_usd:.2f}** (₹{bid_usd * i_rate:.2f})", inline=True)
+            embed.set_field_at(5, name="High Bidder", value=interaction.user.mention, inline=True)
+            await self.auction_msg.edit(embed=embed)
+            
+            # Channel notification of high bid
+            await interaction.channel.send(f"📈 **New Highest Bid!** {interaction.user.mention} bid **${bid_usd:.2f}**")
+            await interaction.response.send_message(f"✅ Your bid of **${bid_usd:.2f}** was placed successfully!", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Bid recorded but failed to update embed: {e}", ephemeral=True)
+
 class IncreaseDeadlineModal(discord.ui.Modal, title='Increase Auction Deadline'):
     duration = discord.ui.TextInput(
         label='Additional Duration',
@@ -412,10 +479,14 @@ class AuctionControlView(discord.ui.View):
         super().__init__(timeout=None)
         self.auction_id = auction_id
         self.cog = cog
-        
-        # Explicit custom_ids for persistence across bot restarts
+        # Set persistent custom IDs for across restarts
+        self.place_bid_btn.custom_id = f"auc_bid_{auction_id}"
         self.increase_btn.custom_id = f"auc_inc_{auction_id}"
         self.stop_btn.custom_id = f"auc_stp_{auction_id}"
+
+    @discord.ui.button(label="Place Bid", style=discord.ButtonStyle.primary, emoji="📈")
+    async def place_bid_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(PlaceBidModal(self.auction_id, self.cog, interaction.message))
 
     @discord.ui.button(label="Increase Deadline", style=discord.ButtonStyle.secondary)
     async def increase_btn(self, interaction: discord.Interaction, button: discord.ui.Button):

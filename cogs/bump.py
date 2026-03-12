@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 from database import db_handler
 import asyncio
+import os
 
 class BumpReminderCog(commands.Cog):
     def __init__(self, bot):
@@ -39,21 +40,18 @@ class BumpReminderCog(commands.Cog):
             return
 
         # Disboard usually sends an embed when a bump is successful.
-        # Check if the embed indicates a successful bump.
         if message.embeds:
             embed = message.embeds[0]
-            # Disboard's success embed usually has "Bump done!" or "Bumped" in the description
             if embed.description and "Bump done!" in embed.description:
                 config = await db_handler.get_bump_config(message.guild.id)
                 if not config:
-                    return # No config set for this guild
+                    return
 
                 channel_id, role_id = config
                 bump_channel = message.guild.get_channel(channel_id)
                 bump_role = message.guild.get_role(role_id)
 
                 if bump_channel and bump_role:
-                    # Send immediate confirmation of timer start
                     confirm_embed = discord.Embed(
                         description="✅ **Bump registered!** I will remind you again in exactly 2 hours.",
                         color=discord.Color.green()
@@ -69,10 +67,15 @@ class BumpReminderCog(commands.Cog):
                         description="It has been 2 hours! Please type `/bump` to boost the server again.",
                         color=discord.Color.brand_green()
                     )
-                    banner_path = r"C:\Users\AP\.gemini\antigravity\brain\01c6690f-fa0c-4ce5-8bc2-8a5ba3841a39\bump_reminder_banner_1773331934414.png"
-                    file = discord.File(banner_path, filename="banner.png")
-                    reminder_embed.set_image(url="attachment://banner.png")
-                    await bump_channel.send(content=bump_role.mention, embed=reminder_embed, file=file)
+                    
+                    # Use a relative path for the banner
+                    banner_path = os.path.join("banners", "bump.png")
+                    if os.path.exists(banner_path):
+                        file = discord.File(banner_path, filename="banner.png")
+                        reminder_embed.set_image(url="attachment://banner.png")
+                        await bump_channel.send(content=bump_role.mention, embed=reminder_embed, file=file)
+                    else:
+                        await bump_channel.send(content=bump_role.mention, embed=reminder_embed)
 
 async def setup(bot):
     await bot.add_cog(BumpReminderCog(bot))
