@@ -280,6 +280,64 @@ class AuctionCog(commands.Cog):
         
         await interaction.response.send_message(f"✅ Auction started in {interaction.channel.mention}!", ephemeral=True)
 
+    @app_commands.command(name="set-highest-bid", description="Admin only: Manually set the highest bidder and price")
+    @app_commands.describe(
+        user="The new high bidder",
+        price="The new highest price (e.g. 100$ or 8000₹)"
+    )
+    async def set_highest_bid(self, interaction: discord.Interaction, user: discord.Member, price: str):
+        config = await db_handler.get_auction_config(interaction.guild_id)
+        if not config:
+            await interaction.response.send_message("❌ Auction system is not set up.", ephemeral=True)
+            return
+            
+        _, _, admin_role_id, _ = config
+        if not interaction.user.guild_permissions.administrator and not any(r.id == admin_role_id for r in interaction.user.roles):
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+
+        auction_data = await db_handler.get_auction_by_channel(interaction.channel_id)
+        if not auction_data:
+            await interaction.response.send_message("❌ No active auction found in this channel.", ephemeral=True)
+            return
+
+        try:
+            amount = self.parse_numeric(price)
+            currency = '₹' if '₹' in price else '$'
+            auction_id, msg_id, title, start_price, min_raise, i_rate, end_time_str = auction_data
+            
+            bid_usd = amount / i_rate if currency == '₹' else amount
+            
+            if bid_usd < (start_price - 0.001):
+                await interaction.response.send_message(f"❌ Force bid must be at least the starting price (${start_price:.2f}).", ephemeral=True)
+                return
+
+            # Force the bid in the database
+            await db_handler.delete_bids_above(auction_id, bid_usd) # Clean up any existing bids that were higher
+            await db_handler.add_bid(auction_id, user.id, bid_usd)
+            
+            # Update the embed
+            try:
+                main_msg = await interaction.channel.fetch_message(msg_id)
+                embed = main_msg.embeds[0]
+                
+                # Fetch end time for embed update
+                end_time = datetime.datetime.fromisoformat(end_time_str)
+                if end_time.tzinfo is None:
+                    end_time = end_time.replace(tzinfo=datetime.timezone.utc)
+                
+                embed.set_field_at(4, name="Current Bid", value=f"**${bid_usd:.2f}** (₹{bid_usd * i_rate:.2f})", inline=True)
+                embed.set_field_at(5, name="High Bidder", value=user.mention, inline=True)
+                await main_msg.edit(embed=embed)
+                
+                await interaction.response.send_message(f"✅ Successfully set highest bid to **${bid_usd:.2f}** for {user.mention}.", ephemeral=True)
+                await interaction.channel.send(f"⚠️ **Admin Override**: {interaction.user.mention} manually set the highest bid to **${bid_usd:.2f}** (₹{bid_usd * i_rate:.2f}) for {user.mention}!")
+            except Exception as e:
+                await interaction.response.send_message(f"❌ Bid updated in DB but failed to update embed: {e}", ephemeral=True)
+
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Failed to set bid: {e}", ephemeral=True)
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:

@@ -197,6 +197,11 @@ async def add_bid(auction_id: int, user_id: int, amount_usd: float):
         await db.execute('INSERT INTO bids (auction_id, user_id, amount_usd) VALUES (?, ?, ?)', (auction_id, user_id, amount_usd))
         await db.commit()
 
+async def delete_bids_above(auction_id: int, amount_usd: float):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('DELETE FROM bids WHERE auction_id = ? AND amount_usd > ?', (auction_id, amount_usd))
+        await db.commit()
+
 async def get_highest_bid(auction_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute('SELECT user_id, amount_usd FROM bids WHERE auction_id = ? ORDER BY amount_usd DESC LIMIT 1', (auction_id,)) as cursor:
