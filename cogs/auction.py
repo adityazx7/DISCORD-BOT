@@ -122,6 +122,14 @@ class AuctionCog(commands.Cog):
                 await channel.send(content="🔨 **Auction Ended!** No bids were placed.")
             
             await message.edit(embed=embed, view=None)
+            
+            # Delete sticky message if it exists to stop moderation presence
+            sticky_id = self.sticky_message_ids.pop(channel_id, None)
+            if sticky_id:
+                try:
+                    s_msg = await channel.fetch_message(sticky_id)
+                    await s_msg.delete()
+                except: pass
         except Exception as e:
             print(f"Error finalizing auction {auction_id}: {e}")
 
@@ -346,6 +354,11 @@ class AuctionCog(commands.Cog):
         config = await db_handler.get_auction_config(message.guild.id)
         if not config: return
         
+        # FIX: Only moderate messages in channels that have an ACTIVE auction
+        auction_data = await db_handler.get_auction_by_channel(message.channel.id)
+        if not auction_data:
+            return
+
         _, _, _, mod_role_id = config
 
         # Admins/Mods can bid, but they are ignored if they type plain text that isn't a bid
@@ -365,10 +378,7 @@ class AuctionCog(commands.Cog):
         amount = float(match.group(1))
         currency = match.group(3)
         
-        auction_data = await db_handler.get_auction_by_channel(message.channel.id)
-        if not auction_data:
-            return
-
+        # Use existing auction_data instead of fetching again
         auction_id, msg_id, title, start_price, min_raise, i_rate, end_time_str = auction_data
         bid_usd = amount / i_rate if currency == '₹' else amount
         
