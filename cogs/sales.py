@@ -50,6 +50,10 @@ class SalesCog(commands.Cog):
         exp_hacked=[
             app_commands.Choice(name="Yes", value="Yes"),
             app_commands.Choice(name="No", value="No")
+        ],
+        device=[
+            app_commands.Choice(name="Android", value="Android"),
+            app_commands.Choice(name="iOS", value="iOS")
         ]
     )
     async def post_account(
@@ -60,6 +64,7 @@ class SalesCog(commands.Cog):
         description: str | None = None, 
         steam_linked: app_commands.Choice[str] | None = None, 
         exp_hacked: app_commands.Choice[str] | None = None, 
+        device: app_commands.Choice[str] | None = None,
         image: discord.Attachment | None = None
     ):
         # Build the dynamic description
@@ -73,6 +78,8 @@ class SalesCog(commands.Cog):
             tags.append(f"**🎮 Steam Linked:** {steam_linked.value}")
         if exp_hacked:
             tags.append(f"**⚠️ EXP Hacked:** {exp_hacked.value}")
+        if device:
+            tags.append(f"**📱 Device:** {device.value}")
             
         if tags:
             desc_parts.append("\n".join(tags))
@@ -106,7 +113,14 @@ class SalesCog(commands.Cog):
         buyer="The user who bought the account",
         description="What was sold to the user (e.g. 'Stacked OG Account')",
         vouch_number="Optional vouch counter (e.g. '#24' or '24')",
+        device="The device used (Android/iOS)",
         image="Optional screenshot of the transaction or account"
+    )
+    @app_commands.choices(
+        device=[
+            app_commands.Choice(name="Android", value="Android"),
+            app_commands.Choice(name="iOS", value="iOS")
+        ]
     )
     async def vouch(
         self, 
@@ -114,13 +128,14 @@ class SalesCog(commands.Cog):
         buyer: discord.Member, 
         description: str, 
         vouch_number: str | None = None,
+        device: app_commands.Choice[str] | None = None,
         image: discord.Attachment | None = None
     ):
         # Create a success-themed embed
         vouch_title = f"✅ Successful Sale! {vouch_number if vouch_number else ''}".strip()
         embed = discord.Embed(
             title=vouch_title,
-            description=f"**Seller:** {interaction.user.mention}\n**Buyer:** {buyer.mention}\n\n**Item Sold:**\n{description}",
+            description=f"**Seller:** {interaction.user.mention}\n**Buyer:** {buyer.mention}\n" + (f"**Device:** {device.value}\n" if device else "") + f"\n**Item Sold:**\n{description}",
             color=discord.Color.green()
         )
         

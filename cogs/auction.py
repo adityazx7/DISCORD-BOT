@@ -18,7 +18,7 @@ class AuctionCog(commands.Cog):
     async def cog_load(self):
         """Register persistent views for all active auctions on startup."""
         active_auctions = await db_handler.get_all_active_auctions()
-        for auction_id, _, _, _ in active_auctions:
+        for auction_id, _, _, message_id, _ in active_auctions:
             self.bot.add_view(AuctionControlView(auction_id, self))
         print(f"Registered {len(active_auctions)} persistent auction views.")
 
@@ -33,24 +33,23 @@ class AuctionCog(commands.Cog):
         active_auctions = await db_handler.get_all_active_auctions()
         now = datetime.datetime.now(datetime.timezone.utc)
         
-        for auction_id, guild_id, message_id, end_time_str in active_auctions:
+        for auction_id, guild_id, channel_id, message_id, end_time_str in active_auctions:
             end_time = datetime.datetime.fromisoformat(end_time_str)
             if end_time.tzinfo is None:
                 end_time = end_time.replace(tzinfo=datetime.timezone.utc)
                 
             if now >= end_time:
-                await self.finalize_auction(auction_id, guild_id, message_id)
+                await self.finalize_auction(auction_id, guild_id, channel_id, message_id)
 
     @tasks.loop(hours=1.0)
     async def hourly_cleanup(self):
         """Delete messages with ❌ reactions every hour to keep the channel clean."""
         active_auctions = await db_handler.get_all_active_auctions()
         scanned_channels = set()
-        for _, guild_id, _, _ in active_auctions:
-            config = await db_handler.get_auction_config(guild_id)
-            if config and config[0] not in scanned_channels:
-                scanned_channels.add(config[0])
-                channel = self.bot.get_channel(config[0])
+        for _, guild_id, channel_id, _, _ in active_auctions:
+            if channel_id not in scanned_channels:
+                scanned_channels.add(channel_id)
+                channel = self.bot.get_channel(channel_id)
                 if channel:
                     try:
                         async for msg in channel.history(limit=100):
@@ -62,12 +61,8 @@ class AuctionCog(commands.Cog):
     async def sticky_task(self):
         """Ensure a sticky info message is at the bottom of auction channels."""
         active_auctions = await db_handler.get_all_active_auctions()
-        for _, guild_id, _, _ in active_auctions:
-            config = await db_handler.get_auction_config(guild_id)
-            if not config: continue
-            
-            bid_channel_id = config[0]
-            channel = self.bot.get_channel(bid_channel_id)
+        for _, guild_id, channel_id, _, _ in active_auctions:
+            channel = self.bot.get_channel(channel_id)
             if not channel: continue
 
             embed = discord.Embed(
@@ -80,7 +75,7 @@ class AuctionCog(commands.Cog):
                 color=discord.Color.blue()
             )
             
-            last_id = self.sticky_message_ids.get(bid_channel_id)
+            last_id = self.sticky_message_ids.get(channel_id)
             is_last = False
             try:
                 # Check if our sticky message is still the most recent
@@ -97,20 +92,16 @@ class AuctionCog(commands.Cog):
                         except: pass
                     
                     new_msg = await channel.send(embed=embed)
-                    self.sticky_message_ids[bid_channel_id] = new_msg.id
+                    self.sticky_message_ids[channel_id] = new_msg.id
             except: pass
 
-    async def finalize_auction(self, auction_id, guild_id, message_id):
+    async def finalize_auction(self, auction_id, guild_id, channel_id, message_id):
         """Mark auction as ended and update the embed."""
         await db_handler.end_auction(auction_id)
         guild = self.bot.get_guild(guild_id)
         if not guild: return
         
-        config = await db_handler.get_auction_config(guild_id)
-        if not config: return
-        
-        bid_channel_id = config[0]
-        channel = guild.get_channel(bid_channel_id)
+        channel = guild.get_channel(channel_id)
         if not channel: return
         
         try:
@@ -265,7 +256,7 @@ class AuctionCog(commands.Cog):
         end_time = now + datetime.timedelta(hours=h_val)
         
         auction_id = await db_handler.create_auction(
-            interaction.guild_id, title, details, s_price, m_raise, i_rate, end_time.isoformat()
+            interaction.guild_id, interaction.channel_id, title, details, s_price, m_raise, i_rate, end_time.isoformat()
         )
         
         embed = discord.Embed(
@@ -284,10 +275,10 @@ class AuctionCog(commands.Cog):
             embed.set_image(url=image.url)
             
         view = AuctionControlView(auction_id, self)
-        msg = await channel.send(embed=embed, view=view)
+        msg = await interaction.channel.send(embed=embed, view=view)
         await db_handler.set_auction_message(auction_id, msg.id)
         
-        await interaction.response.send_message(f"✅ Auction started in {channel.mention}!", ephemeral=True)
+        await interaction.response.send_message(f"✅ Auction started in {interaction.channel.mention}!", ephemeral=True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -297,9 +288,7 @@ class AuctionCog(commands.Cog):
         config = await db_handler.get_auction_config(message.guild.id)
         if not config: return
         
-        bid_channel_id, _, _, mod_role_id = config
-        if message.channel.id != bid_channel_id:
-            return
+        _, _, _, mod_role_id = config
 
         # Admins/Mods can bid, but they are ignored if they type plain text that isn't a bid
         content = message.content.strip()
@@ -318,7 +307,7 @@ class AuctionCog(commands.Cog):
         amount = float(match.group(1))
         currency = match.group(3)
         
-        auction_data = await db_handler.get_auction_by_channel(message.guild.id)
+        auction_data = await db_handler.get_auction_by_channel(message.channel.id)
         if not auction_data:
             return
 
@@ -427,7 +416,7 @@ class AuctionControlView(discord.ui.View):
 
         # Defer to prevent "Interaction failed" while processing DB and message updates
         await interaction.response.defer(ephemeral=True)
-        await self.cog.finalize_auction(self.auction_id, interaction.guild_id, interaction.message.id)
+        await self.cog.finalize_auction(self.auction_id, interaction.guild_id, interaction.channel_id, interaction.message.id)
         await interaction.followup.send("🛑 Auction stopped manually.")
 
 async def setup(bot):

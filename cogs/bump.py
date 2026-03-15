@@ -33,6 +33,15 @@ class BumpReminderCog(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"❌ Failed to save config: {e}", ephemeral=True)
 
+    @app_commands.command(name="bump-remove", description="Admin only: Remove the Disboard bump reminder configuration")
+    @app_commands.default_permissions(administrator=True)
+    async def bump_remove(self, interaction: discord.Interaction):
+        try:
+            await db_handler.delete_bump_config(interaction.guild_id)
+            await interaction.response.send_message("✅ **Bump reminder removed!** I will no longer send reminders in this guild.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Failed to remove config: {e}", ephemeral=True)
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         # Ignore DMs or messages not from Disboard

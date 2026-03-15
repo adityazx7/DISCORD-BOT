@@ -40,6 +40,30 @@ class ModerationCog(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"An error occurred: {e}", ephemeral=True)
 
+    @app_commands.command(name="unban", description="Unban a user from the server using their ID")
+    @app_commands.describe(user_id="The ID of the user to unban", reason="The reason for unbanning")
+    @app_commands.default_permissions(ban_members=True)
+    async def unban(self, interaction: discord.Interaction, user_id: str, reason: str | None = None):
+        try:
+            user = await self.bot.fetch_user(int(user_id))
+            await interaction.guild.unban(user, reason=f"Unbanned by {interaction.user}: {reason or 'No reason provided'}")
+            
+            embed = discord.Embed(
+                title="User Unbanned",
+                description=f"**{user.name}** has been unbanned.",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Reason", value=reason or "No reason provided")
+            await interaction.response.send_message(embed=embed)
+        except ValueError:
+            await interaction.response.send_message("❌ Invalid User ID. Please provide a numeric ID.", ephemeral=True)
+        except discord.NotFound:
+            await interaction.response.send_message("❌ User not found or not banned.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don't have permission to unban that user.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ An error occurred: {e}", ephemeral=True)
+
     @app_commands.command(name="kick", description="Kick a member from the server")
     @app_commands.describe(target="The member to kick", reason="The reason for the kick")
     @app_commands.default_permissions(kick_members=True)
